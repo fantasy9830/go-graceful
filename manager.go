@@ -16,7 +16,7 @@ var (
 )
 
 type Manager struct {
-	mu            sync.RWMutex
+	mu            sync.Mutex
 	wg            sync.WaitGroup
 	ctx           context.Context
 	cancel        context.CancelFunc
