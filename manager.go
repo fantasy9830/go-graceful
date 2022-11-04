@@ -15,9 +15,10 @@ var (
 	once    sync.Once
 )
 
-type GracefulShutdown interface {
+type GracefulManager interface {
 	Go(f func(context.Context))
 	RegisterOnShutdown(f func())
+	Done() <-chan struct{}
 }
 
 type Manager struct {
@@ -31,7 +32,7 @@ type Manager struct {
 	inShutdown    atomic.Bool
 }
 
-func NewManager(optFuncs ...OptionFunc) *Manager {
+func NewManager(optFuncs ...OptionFunc) GracefulManager {
 	once.Do(func() {
 		// default options
 		managerCtx, managerCancel := context.WithCancel(context.Background())
@@ -53,7 +54,7 @@ func NewManager(optFuncs ...OptionFunc) *Manager {
 	return manager
 }
 
-func GetManager() *Manager {
+func GetManager() GracefulManager {
 	return NewManager()
 }
 
