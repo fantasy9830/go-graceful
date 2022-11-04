@@ -15,6 +15,11 @@ var (
 	once    sync.Once
 )
 
+type GracefulShutdown interface {
+	Go(f func(context.Context))
+	RegisterOnShutdown(f func())
+}
+
 type Manager struct {
 	mu            sync.Mutex
 	wg            sync.WaitGroup
