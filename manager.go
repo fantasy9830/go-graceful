@@ -11,13 +11,13 @@ import (
 )
 
 var (
-	manager *Manager
+	manager GracefulManager
 	once    sync.Once
 )
 
 type GracefulManager interface {
-	Go(f func(context.Context))
-	RegisterOnShutdown(f func())
+	Go(func(context.Context))
+	RegisterOnShutdown(func())
 	Done() <-chan struct{}
 }
 
@@ -33,29 +33,35 @@ type Manager struct {
 }
 
 func NewManager(optFuncs ...OptionFunc) GracefulManager {
-	once.Do(func() {
-		// default options
-		managerCtx, managerCancel := context.WithCancel(context.Background())
-		manager = &Manager{
-			ctx:           context.Background(),
-			managerCtx:    managerCtx,
-			managerCancel: managerCancel,
-		}
+	// default options
+	managerCtx, managerCancel := context.WithCancel(context.Background())
+	m := &Manager{
+		ctx:           context.Background(),
+		managerCtx:    managerCtx,
+		managerCancel: managerCancel,
+	}
 
-		for _, applyFunc := range optFuncs {
-			applyFunc(manager)
-		}
+	for _, applyFunc := range optFuncs {
+		applyFunc(m)
+	}
 
-		manager.ctx, manager.cancel = signal.NotifyContext(manager.ctx, os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
+	m.ctx, m.cancel = signal.NotifyContext(
+		m.ctx,
+		os.Interrupt,    // SIGINT, Ctrl+C
+		syscall.SIGTERM, // systemd
+	)
 
-		go manager.gracefulShutdown()
-	})
+	go m.gracefulShutdown()
 
-	return manager
+	return m
 }
 
 func GetManager() GracefulManager {
-	return NewManager()
+	once.Do(func() {
+		manager = NewManager()
+	})
+
+	return manager
 }
 
 func (m *Manager) Go(f func(context.Context)) {
@@ -111,8 +117,8 @@ func (m *Manager) gracefulShutdown() {
 	go func() {
 		m.wg.Wait()
 
-		m.mu.Lock()
 		// graceful shutdown finish
+		m.mu.Lock()
 		m.managerCancel()
 		m.mu.Unlock()
 	}()
