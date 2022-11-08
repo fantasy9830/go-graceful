@@ -16,20 +16,23 @@ var (
 )
 
 type GracefulManager interface {
-	Go(func(context.Context))
-	RegisterOnShutdown(func())
+	Go(func(context.Context) error)
+	RegisterOnShutdown(func() error)
 	Done() <-chan struct{}
+	Errors() <-chan error
 }
 
 type Manager struct {
-	mu            sync.Mutex
-	wg            sync.WaitGroup
-	ctx           context.Context
-	cancel        context.CancelFunc
-	onShutdown    []func()
-	managerCtx    context.Context
-	managerCancel context.CancelFunc
-	inShutdown    atomic.Bool
+	mu              sync.Mutex
+	wg              sync.WaitGroup
+	ctx             context.Context
+	cancel          context.CancelFunc
+	onShutdown      []func() error
+	managerCtx      context.Context
+	managerCancel   context.CancelFunc
+	inShutdown      atomic.Bool
+	errChan         chan error
+	isErrChanReader atomic.Bool
 }
 
 func NewManager(optFuncs ...OptionFunc) GracefulManager {
@@ -39,6 +42,7 @@ func NewManager(optFuncs ...OptionFunc) GracefulManager {
 		ctx:           context.Background(),
 		managerCtx:    managerCtx,
 		managerCancel: managerCancel,
+		errChan:       make(chan error, 1),
 	}
 
 	for _, applyFunc := range optFuncs {
@@ -64,7 +68,7 @@ func GetManager() GracefulManager {
 	return manager
 }
 
-func (m *Manager) Go(f func(context.Context)) {
+func (m *Manager) Go(f func(context.Context) error) {
 	if m.shuttingDown() {
 		log.Print("service shutting down ...")
 		return
@@ -74,11 +78,18 @@ func (m *Manager) Go(f func(context.Context)) {
 	go func() {
 		defer m.wg.Done()
 
-		f(m.ctx)
+		err := f(m.ctx)
+		if err != nil && m.isErrChanRead() {
+			select {
+			case m.errChan <- err:
+			default:
+				log.Print("cannot write error to error channel, it is not read")
+			}
+		}
 	}()
 }
 
-func (m *Manager) RegisterOnShutdown(f func()) {
+func (m *Manager) RegisterOnShutdown(f func() error) {
 	if m.shuttingDown() {
 		log.Print("service shutting down ...")
 		return
@@ -89,6 +100,11 @@ func (m *Manager) RegisterOnShutdown(f func()) {
 	m.mu.Unlock()
 }
 
+func (m *Manager) Errors() <-chan error {
+	m.setErrChanRead()
+	return m.errChan
+}
+
 func (m *Manager) Done() <-chan struct{} {
 	return m.managerCtx.Done()
 }
@@ -96,10 +112,17 @@ func (m *Manager) Done() <-chan struct{} {
 func (m *Manager) shutdown() {
 	for _, shutdownFunc := range m.onShutdown {
 		m.wg.Add(1)
-		go func(f func()) {
+		go func(f func() error) {
 			defer m.wg.Done()
 
-			f()
+			err := f()
+			if err != nil && m.isErrChanRead() {
+				select {
+				case m.errChan <- err:
+				default:
+					log.Print("cannot write error to error channel, it is not read")
+				}
+			}
 		}(shutdownFunc)
 	}
 }
@@ -119,6 +142,8 @@ func (m *Manager) gracefulShutdown() {
 
 		// graceful shutdown finish
 		m.mu.Lock()
+		close(m.errChan)
+		m.errChan = nil
 		m.managerCancel()
 		m.mu.Unlock()
 	}()
@@ -130,4 +155,12 @@ func (m *Manager) shuttingDown() bool {
 
 func (m *Manager) setShuttingDown() {
 	m.inShutdown.Store(true)
+}
+
+func (m *Manager) isErrChanRead() bool {
+	return m.isErrChanReader.Load()
+}
+
+func (m *Manager) setErrChanRead() {
+	m.isErrChanReader.Store(true)
 }
