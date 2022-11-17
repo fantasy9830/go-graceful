@@ -1,5 +1,10 @@
 # go-graceful
 
+## Installation
+```shell
+go get github.com/fantasy9830/go-graceful
+```
+
 ## Usage
 ### func WithContext
 ```go
